@@ -11,10 +11,6 @@ import {
 } from "obsidian";
 
 const VIEW_TYPE_HTML = "html-docs";
-const HTML_EXTENSIONS = ["html", "htm"] as const;
-type HtmlExtension = (typeof HTML_EXTENSIONS)[number];
-const isHtmlExtension = (ext: string): ext is HtmlExtension =>
-	(HTML_EXTENSIONS as readonly string[]).includes(ext);
 
 interface EmbedContext {
 	containerEl: HTMLElement;
@@ -181,7 +177,7 @@ class HtmlView extends FileView {
 	}
 
 	canAcceptExtension(extension: string): boolean {
-		return isHtmlExtension(extension);
+		return extension === "html" || extension === "htm";
 	}
 
 	async onLoadFile(file: TFile): Promise<void> {
@@ -262,7 +258,7 @@ export default class HtmlDocsPlugin extends Plugin {
 			VIEW_TYPE_HTML,
 			(leaf: WorkspaceLeaf) => new HtmlView(leaf),
 		);
-		this.registerExtensions([...HTML_EXTENSIONS], VIEW_TYPE_HTML);
+		this.registerExtensions(["html", "htm"], VIEW_TYPE_HTML);
 		this.registerExistingHtmlTabNavigation();
 		this.registerThemeRefresh();
 
@@ -270,10 +266,12 @@ export default class HtmlDocsPlugin extends Plugin {
 		if (!embedRegistry) {
 			throw new Error("HTML Docs: app.embedRegistry is unavailable; cannot register HTML embeds.");
 		}
-		for (const ext of HTML_EXTENSIONS) {
-			embedRegistry.registerExtension(ext, (context, file) => new HtmlEmbed(context.containerEl, this, file));
-			this.register(() => embedRegistry.unregisterExtension(ext));
-		}
+		embedRegistry.registerExtension("html", (context, file) => new HtmlEmbed(context.containerEl, this, file));
+		embedRegistry.registerExtension("htm", (context, file) => new HtmlEmbed(context.containerEl, this, file));
+		this.register(() => {
+			embedRegistry.unregisterExtension("html");
+			embedRegistry.unregisterExtension("htm");
+		});
 
 		// Obsidian hides files with unrecognized extensions in the file
 		// explorer unless "Show all file types" is on; registering the
@@ -365,7 +363,7 @@ export default class HtmlDocsPlugin extends Plugin {
 		const file =
 			this.app.metadataCache.getFirstLinkpathDest(linkpath, sourcePath) ??
 			this.app.vault.getAbstractFileByPath(linkpath);
-		return file instanceof TFile && isHtmlExtension(file.extension) ? file : null;
+		return file instanceof TFile && (file.extension === "html" || file.extension === "htm") ? file : null;
 	}
 
 	private findOpenHtmlLeaf(file: TFile): WorkspaceLeaf | null {
