@@ -177,7 +177,7 @@ class HtmlView extends FileView {
 	}
 
 	canAcceptExtension(extension: string): boolean {
-		return extension === "html";
+		return extension === "html" || extension === "htm";
 	}
 
 	async onLoadFile(file: TFile): Promise<void> {
@@ -258,7 +258,7 @@ export default class HtmlDocsPlugin extends Plugin {
 			VIEW_TYPE_HTML,
 			(leaf: WorkspaceLeaf) => new HtmlView(leaf),
 		);
-		this.registerExtensions(["html"], VIEW_TYPE_HTML);
+		this.registerExtensions(["html", "htm"], VIEW_TYPE_HTML);
 		this.registerExistingHtmlTabNavigation();
 		this.registerThemeRefresh();
 
@@ -267,7 +267,11 @@ export default class HtmlDocsPlugin extends Plugin {
 			throw new Error("HTML Docs: app.embedRegistry is unavailable; cannot register HTML embeds.");
 		}
 		embedRegistry.registerExtension("html", (context, file) => new HtmlEmbed(context.containerEl, this, file));
-		this.register(() => embedRegistry.unregisterExtension("html"));
+		embedRegistry.registerExtension("htm", (context, file) => new HtmlEmbed(context.containerEl, this, file));
+		this.register(() => {
+			embedRegistry.unregisterExtension("html");
+			embedRegistry.unregisterExtension("htm");
+		});
 
 		// Obsidian hides files with unrecognized extensions in the file
 		// explorer unless "Show all file types" is on; registering the
@@ -359,7 +363,7 @@ export default class HtmlDocsPlugin extends Plugin {
 		const file =
 			this.app.metadataCache.getFirstLinkpathDest(linkpath, sourcePath) ??
 			this.app.vault.getAbstractFileByPath(linkpath);
-		return file instanceof TFile && file.extension === "html" ? file : null;
+		return file instanceof TFile && (file.extension === "html" || file.extension === "htm") ? file : null;
 	}
 
 	private findOpenHtmlLeaf(file: TFile): WorkspaceLeaf | null {
