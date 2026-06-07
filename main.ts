@@ -2,7 +2,6 @@ import {
 	Component,
 	FileView,
 	getLinkpath,
-	Notice,
 	type OpenViewState,
 	type PaneType,
 	Plugin,
@@ -272,18 +271,6 @@ export default class HtmlDocsPlugin extends Plugin {
 			embedRegistry.unregisterExtension("html");
 			embedRegistry.unregisterExtension("htm");
 		});
-
-		// Obsidian hides files with unrecognized extensions in the file
-		// explorer unless "Show all file types" is on; registering the
-		// extension only routes the view, it doesn't add to that filter.
-		const vault = this.app.vault as { getConfig?: (key: string) => unknown };
-		const showUnsupported = vault.getConfig?.("showUnsupportedFiles");
-		if (showUnsupported === false) {
-			new Notice(
-				"To see .html files in your file explorer, please enable 'Show all file types' in Settings → Files & Links.",
-				10000,
-			);
-		}
 	}
 
 	trackHtmlEmbed(embed: HtmlEmbed): void {
