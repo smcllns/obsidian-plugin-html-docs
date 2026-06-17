@@ -8,7 +8,7 @@
 #   - jq on PATH
 #
 # Run:
-#   npm test
+#   bun run test
 #   # or:  bash test/test.sh
 
 set -euo pipefail
@@ -91,24 +91,28 @@ cleanup() {
   # the temporary files. Never detach unrelated html-docs leaves.
   local cleanup_result cleanup_status
   set +e
-  cleanup_result="$(oeval "
-    (async () => {
+  # Detach test leaves, then (after a bash-side wait, since an in-eval setTimeout
+  # would time out and return empty) inspect for survivors and restore focus.
+  oeval "
+    (() => {
       const paths = new Set(['$FIXTURE_REL', '$DEFERRED_FIXTURE_REL', '$EMBED_NOTE_REL', '$SIZED_EMBED_NOTE_REL', '$CANVAS_REL']);
       const testLeaves = window.__hvTestLeaves || new Set();
       app.workspace.iterateAllLeaves((leaf) => {
         const file = leaf.view && leaf.view.file;
         if (file && paths.has(file.path)) testLeaves.add(leaf);
       });
-
-      const detachErrors = [];
+      window.__hvTestLeaves = testLeaves;
       for (const leaf of testLeaves) {
-        try {
-          leaf.detach();
-        } catch (e) {
-          detachErrors.push(e && e.message ? e.message : String(e));
-        }
+        try { leaf.detach(); } catch (e) {}
       }
-      await new Promise(resolve => window.setTimeout(resolve, 300));
+      return 'ok';
+    })()
+  " >/dev/null 2>&1
+  sleep 1
+  cleanup_result="$(oeval "
+    (() => {
+      const paths = new Set(['$FIXTURE_REL', '$DEFERRED_FIXTURE_REL', '$EMBED_NOTE_REL', '$SIZED_EMBED_NOTE_REL', '$CANVAS_REL']);
+      const testLeaves = window.__hvTestLeaves || new Set();
 
       const remaining = [];
       app.workspace.iterateAllLeaves((leaf) => {
@@ -132,7 +136,7 @@ cleanup() {
       delete window.__hvTestLeaves;
       delete window.__hvPreviousLeaf;
 
-      return JSON.stringify({ remaining, detachErrors, restoreError });
+      return JSON.stringify({ remaining, restoreError });
     })()
   " 2>/dev/null)"
   cleanup_status=$?
@@ -205,7 +209,12 @@ OUTER="$(oeval "
   })()
 ")"
 
-THEME_RERENDER="$(oeval "
+# obsidian-cli eval returns empty if its async IIFE awaits a setTimeout (the
+# eval response times out before a macrotask delay resolves), so the theme
+# re-render wait is driven from bash: trigger the toggle, sleep, then read the
+# re-rendered state in a second short eval. Blob-URL fetches resolve fast enough
+# to stay inside a single eval. State is stashed on window across evals.
+oeval "
   (async () => {
     const readInjectedScheme = async (iframe) => {
       if (!iframe) return null;
@@ -217,38 +226,56 @@ THEME_RERENDER="$(oeval "
       const file = leaf.view && leaf.view.file;
       if (!view && file && file.path === '$FIXTURE_REL') view = leaf.view;
     });
-
     const body = document.body;
-    const originalLight = body.classList.contains('theme-light');
-    const originalDark = body.classList.contains('theme-dark');
-    const result = {
-      before: null,
-      after: null,
-      target: null,
-      rerendered: false,
-      restored: false,
+    const state = {
+      originalLight: body.classList.contains('theme-light'),
+      originalDark: body.classList.contains('theme-dark'),
+      result: { before: null, after: null, target: null, rerendered: false, restored: false },
     };
-
-    try {
-      const iframe = view && view.contentEl && view.contentEl.querySelector('iframe.html-docs-iframe');
-      result.before = await readInjectedScheme(iframe);
-      result.target = result.before === 'dark' ? 'light' : 'dark';
-      body.classList.toggle('theme-light', result.target === 'light');
-      body.classList.toggle('theme-dark', result.target === 'dark');
-      await new Promise(resolve => setTimeout(resolve, 300));
-      const refreshedIframe = view && view.contentEl && view.contentEl.querySelector('iframe.html-docs-iframe');
-      result.after = await readInjectedScheme(refreshedIframe);
-      result.rerendered = !!iframe && !!refreshedIframe && iframe.src !== refreshedIframe.src;
-    } finally {
-      body.classList.toggle('theme-light', originalLight);
-      body.classList.toggle('theme-dark', originalDark);
-      await new Promise(resolve => setTimeout(resolve, 300));
-      result.restored =
-        body.classList.contains('theme-light') === originalLight &&
-        body.classList.contains('theme-dark') === originalDark;
-    }
-
-    return JSON.stringify(result);
+    const iframe = view && view.contentEl && view.contentEl.querySelector('iframe.html-docs-iframe');
+    state.beforeSrc = iframe ? iframe.src : null;
+    state.result.before = await readInjectedScheme(iframe);
+    state.result.target = state.result.before === 'dark' ? 'light' : 'dark';
+    body.classList.toggle('theme-light', state.result.target === 'light');
+    body.classList.toggle('theme-dark', state.result.target === 'dark');
+    window.__hvThemeState = state;
+    return 'ok';
+  })()
+" >/dev/null
+sleep 1
+oeval "
+  (async () => {
+    const readInjectedScheme = async (iframe) => {
+      if (!iframe) return null;
+      const html = await fetch(iframe.src).then((response) => response.text());
+      return html.match(/color-scheme:\\s*(light|dark);/)?.[1] || null;
+    };
+    const state = window.__hvThemeState;
+    let view = null;
+    app.workspace.iterateAllLeaves((leaf) => {
+      const file = leaf.view && leaf.view.file;
+      if (!view && file && file.path === '$FIXTURE_REL') view = leaf.view;
+    });
+    const refreshedIframe = view && view.contentEl && view.contentEl.querySelector('iframe.html-docs-iframe');
+    state.result.after = await readInjectedScheme(refreshedIframe);
+    state.result.rerendered = !!state.beforeSrc && !!refreshedIframe && state.beforeSrc !== refreshedIframe.src;
+    const body = document.body;
+    body.classList.toggle('theme-light', state.originalLight);
+    body.classList.toggle('theme-dark', state.originalDark);
+    return 'ok';
+  })()
+" >/dev/null
+sleep 1
+THEME_RERENDER="$(oeval "
+  (() => {
+    const state = window.__hvThemeState;
+    const body = document.body;
+    state.result.restored =
+      body.classList.contains('theme-light') === state.originalLight &&
+      body.classList.contains('theme-dark') === state.originalDark;
+    const out = JSON.stringify(state.result);
+    delete window.__hvThemeState;
+    return out;
   })()
 ")"
 
@@ -262,14 +289,21 @@ REGISTRY="$(oeval "
   })
 ")"
 
-DEDUPED_NAVIGATION="$(oeval "
+# Trigger navigation, then read the resulting workspace state after a bash-side
+# wait (see the THEME_RERENDER note on the eval timeout).
+oeval "
   (async () => {
     const note = app.vault.getFileByPath('$EMBED_NOTE_REL');
     const noteLeaf = app.workspace.getLeaf('tab');
     window.__hvTestLeaves.add(noteLeaf);
     await noteLeaf.openFile(note);
     await app.workspace.openLinkText('$FIXTURE_REL', '$EMBED_NOTE_REL', false);
-    await new Promise(resolve => setTimeout(resolve, 300));
+    return 'ok';
+  })()
+" >/dev/null
+sleep 1
+DEDUPED_NAVIGATION="$(oeval "
+  (() => {
     const htmlLeaves = [];
     app.workspace.iterateAllLeaves((leaf) => {
       const view = leaf.view;
@@ -292,7 +326,10 @@ DEDUPED_NAVIGATION="$(oeval "
   })()
 ")"
 
-DEFERRED_STATE_NAVIGATION="$(oeval "
+# Install the deferred-state monkey-patch and trigger navigation, then read the
+# result after a bash-side wait. The patched leaf and its original getViewState
+# are stashed on window so the second eval can read state and restore the patch.
+oeval "
   (async () => {
     const note = app.vault.getFileByPath('$EMBED_NOTE_REL');
     const fakeDeferredLeaf = app.workspace.getLeaf('tab');
@@ -309,14 +346,17 @@ DEFERRED_STATE_NAVIGATION="$(oeval "
       };
     };
 
-    let activeIsFakeDeferredLeaf = false;
-    try {
-      await app.workspace.openLinkText('$DEFERRED_FIXTURE_REL', '$EMBED_NOTE_REL', false);
-      await new Promise(resolve => setTimeout(resolve, 300));
-      activeIsFakeDeferredLeaf = app.workspace.activeLeaf === fakeDeferredLeaf;
-    } finally {
-      fakeDeferredLeaf.getViewState = originalGetViewState;
-    }
+    window.__hvDeferredState = { fakeDeferredLeaf, originalGetViewState };
+    await app.workspace.openLinkText('$DEFERRED_FIXTURE_REL', '$EMBED_NOTE_REL', false);
+    return 'ok';
+  })()
+" >/dev/null
+sleep 1
+DEFERRED_STATE_NAVIGATION="$(oeval "
+  (() => {
+    const { fakeDeferredLeaf, originalGetViewState } = window.__hvDeferredState;
+    const activeIsFakeDeferredLeaf = app.workspace.activeLeaf === fakeDeferredLeaf;
+    fakeDeferredLeaf.getViewState = originalGetViewState;
 
     const realHtmlLeaves = [];
     app.workspace.iterateAllLeaves((leaf) => {
@@ -330,15 +370,20 @@ DEFERRED_STATE_NAVIGATION="$(oeval "
       }
     });
 
-    return JSON.stringify({
+    const out = JSON.stringify({
       activeIsFakeDeferredLeaf,
       fakeDeferredLeafViewType: fakeDeferredLeaf.view && fakeDeferredLeaf.view.getViewType(),
       realHtmlLeafCount: realHtmlLeaves.length,
     });
+    delete window.__hvDeferredState;
+    return out;
   })()
 ")"
 
-MARKDOWN_EMBED="$(oeval "
+# Open the embed note in preview, then read the rendered iframe after a
+# bash-side wait (see the THEME_RERENDER note on the eval timeout). The embed
+# takes ~1.2s to render, so wait longer here.
+oeval "
   (async () => {
     const file = app.vault.getFileByPath('$EMBED_NOTE_REL');
     const leaf = app.workspace.getLeaf('tab');
@@ -346,7 +391,17 @@ MARKDOWN_EMBED="$(oeval "
     await leaf.openFile(file);
     const view = leaf.view;
     if (view && view.setMode) view.setMode('preview');
-    await new Promise(resolve => setTimeout(resolve, 1200));
+    return 'ok';
+  })()
+" >/dev/null
+sleep 2
+MARKDOWN_EMBED="$(oeval "
+  (async () => {
+    let view = null;
+    app.workspace.iterateAllLeaves((leaf) => {
+      const file = leaf.view && leaf.view.file;
+      if (!view && file && file.path === '$EMBED_NOTE_REL') view = leaf.view;
+    });
     const iframe = view && view.contentEl && view.contentEl.querySelector('iframe.html-docs-iframe');
     const container = iframe && iframe.parentElement;
     let contentDoc = null;
@@ -370,7 +425,8 @@ MARKDOWN_EMBED="$(oeval "
   })()
 ")"
 
-SIZED_MARKDOWN_EMBED="$(oeval "
+# Open the sized embed note in preview, then read after a bash-side wait.
+oeval "
   (async () => {
     const file = app.vault.getFileByPath('$SIZED_EMBED_NOTE_REL');
     const leaf = app.workspace.getLeaf('tab');
@@ -378,7 +434,17 @@ SIZED_MARKDOWN_EMBED="$(oeval "
     await leaf.openFile(file);
     const view = leaf.view;
     if (view && view.setMode) view.setMode('preview');
-    await new Promise(resolve => setTimeout(resolve, 1200));
+    return 'ok';
+  })()
+" >/dev/null
+sleep 2
+SIZED_MARKDOWN_EMBED="$(oeval "
+  (() => {
+    let view = null;
+    app.workspace.iterateAllLeaves((leaf) => {
+      const file = leaf.view && leaf.view.file;
+      if (!view && file && file.path === '$SIZED_EMBED_NOTE_REL') view = leaf.view;
+    });
     const iframe = view && view.contentEl && view.contentEl.querySelector('iframe.html-docs-iframe');
     const container = iframe && iframe.parentElement;
     return JSON.stringify({
@@ -389,7 +455,9 @@ SIZED_MARKDOWN_EMBED="$(oeval "
   })()
 ")"
 
-CANVAS_EMBED="$(oeval "
+# Open the canvas and render its html-docs node, then read after a bash-side
+# wait. The canvas view/node are re-found in the read eval.
+oeval "
   (async () => {
     const file = app.vault.getFileByPath('$CANVAS_REL');
     const leaf = app.workspace.getLeaf('tab');
@@ -401,7 +469,18 @@ CANVAS_EMBED="$(oeval "
       node.initialize();
       node.render();
     }
-    await new Promise(resolve => setTimeout(resolve, 1200));
+    return 'ok';
+  })()
+" >/dev/null
+sleep 2
+CANVAS_EMBED="$(oeval "
+  (async () => {
+    let view = null;
+    app.workspace.iterateAllLeaves((leaf) => {
+      const file = leaf.view && leaf.view.file;
+      if (!view && file && file.path === '$CANVAS_REL') view = leaf.view;
+    });
+    const node = view && view.canvas && Array.from(view.canvas.nodes.values()).find((n) => n.file && n.file.path === '$FIXTURE_REL');
     const iframe = node && node.nodeEl && node.nodeEl.querySelector('iframe.html-docs-iframe');
     let contentDoc = null;
     try { contentDoc = iframe ? !!iframe.contentDocument : null; } catch (e) { contentDoc = false; }
