@@ -52,8 +52,6 @@ See `test/fixture.html` for the full list of features exercised — and the inli
 
 After installing the plugin, you can open `.html` files in Obsidian tabs (like a doc), embedded files, and canvas cards.
 
-Obsidian shows `.md` files in the file explorer by default. To see `.html` files too, enable **Settings → Files & links → Show all file types**.
-
 Link to HTML docs with the explicit `.html` extension:
 
 ```markdown

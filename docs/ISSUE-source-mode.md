@@ -27,7 +27,7 @@ This is a **surgical addition**, not a redesign.
 - [ ] Theme refresh (dark/light toggle, `css-change`) does not clobber the source editor. Simplest acceptable implementation: skip the preview re-render while source mode is active.
 - [ ] Existing iframe sandbox model is unchanged: Blob URL, `sandbox="allow-scripts allow-popups allow-forms"`, no `allow-same-origin`, sandbox attribute set before `src`. See `main.ts:142-154` and the explanatory comment.
 - [ ] `HtmlEmbed` (HTML embeds in markdown/canvas) stays read-only — no toggle, no editor.
-- [ ] All existing behavior preserved: cross-file link navigation, doctype preservation, theme variable injection, "Show all file types" notice.
+- [ ] All existing behavior preserved: cross-file link navigation, doctype preservation, theme variable injection.
 
 ## Approach
 
