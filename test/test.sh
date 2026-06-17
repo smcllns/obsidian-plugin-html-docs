@@ -93,8 +93,28 @@ cleanup() {
   set +e
   # Detach test leaves, then (after a bash-side wait, since an in-eval setTimeout
   # would time out and return empty) inspect for survivors and restore focus.
+  # First, defensively undo any global mutation a mid-test failure could have
+  # left behind: the theme-class toggle and the deferred-leaf getViewState patch
+  # used to live in in-eval try/finally blocks, but those waits now span bash
+  # boundaries, so a throw before the restore eval would leak them into the live
+  # app (flipped theme, patched leaf). This guaranteed cleanup path restores them.
   oeval "
     (() => {
+      if (window.__hvThemeState) {
+        try {
+          const body = document.body;
+          body.classList.toggle('theme-light', window.__hvThemeState.originalLight);
+          body.classList.toggle('theme-dark', window.__hvThemeState.originalDark);
+        } catch (e) {}
+        delete window.__hvThemeState;
+      }
+      if (window.__hvDeferredState) {
+        try {
+          window.__hvDeferredState.fakeDeferredLeaf.getViewState = window.__hvDeferredState.originalGetViewState;
+        } catch (e) {}
+        delete window.__hvDeferredState;
+      }
+      delete window.__hvMarkdownEmbedLeaf;
       const paths = new Set(['$FIXTURE_REL', '$DEFERRED_FIXTURE_REL', '$EMBED_NOTE_REL', '$SIZED_EMBED_NOTE_REL', '$CANVAS_REL']);
       const testLeaves = window.__hvTestLeaves || new Set();
       app.workspace.iterateAllLeaves((leaf) => {
@@ -388,6 +408,10 @@ oeval "
     const file = app.vault.getFileByPath('$EMBED_NOTE_REL');
     const leaf = app.workspace.getLeaf('tab');
     window.__hvTestLeaves.add(leaf);
+    // Earlier blocks (DEDUPED_NAVIGATION, DEFERRED_STATE_NAVIGATION) already
+    // opened this same note in other leaves, so the read eval can't re-find the
+    // right one by path — stash this exact leaf and read it back.
+    window.__hvMarkdownEmbedLeaf = leaf;
     await leaf.openFile(file);
     const view = leaf.view;
     if (view && view.setMode) view.setMode('preview');
@@ -397,11 +421,9 @@ oeval "
 sleep 2
 MARKDOWN_EMBED="$(oeval "
   (async () => {
-    let view = null;
-    app.workspace.iterateAllLeaves((leaf) => {
-      const file = leaf.view && leaf.view.file;
-      if (!view && file && file.path === '$EMBED_NOTE_REL') view = leaf.view;
-    });
+    const leaf = window.__hvMarkdownEmbedLeaf;
+    const view = leaf && leaf.view;
+    delete window.__hvMarkdownEmbedLeaf;
     const iframe = view && view.contentEl && view.contentEl.querySelector('iframe.html-docs-iframe');
     const container = iframe && iframe.parentElement;
     let contentDoc = null;
