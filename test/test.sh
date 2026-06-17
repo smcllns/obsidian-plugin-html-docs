@@ -43,7 +43,7 @@ ENABLED="$(oeval "app.plugins.enabledPlugins.has('$PLUGIN_ID') ? 'yes' : 'no'" |
 [[ "$ENABLED" == "yes" ]] || die "plugin '$PLUGIN_ID' is not enabled in vault '$VAULT_PATH'"
 
 echo "building and loading current plugin"
-(cd "$ROOT" && npm run build >/dev/null)
+(cd "$ROOT" && bun run build >/dev/null)
 PLUGIN_DEST="$VAULT_PATH/.obsidian/plugins/$PLUGIN_ID"
 [[ -d "$PLUGIN_DEST" ]] || die "plugin '$PLUGIN_ID' is not installed in vault '$VAULT_PATH'"
 cp "$DIST_DIR/main.js" "$DIST_DIR/manifest.json" "$DIST_DIR/styles.css" "$PLUGIN_DEST/"
